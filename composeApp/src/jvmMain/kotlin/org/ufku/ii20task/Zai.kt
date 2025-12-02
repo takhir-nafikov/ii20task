@@ -39,7 +39,7 @@ class Zai(
             .model("glm-4.6")
             .messages(listOf(systemMessage, userMessage))
             .temperature(0.2f)
-            .maxTokens(1024)
+            .maxTokens(16384)
             .thinking(
                 ChatThinking.builder()
                     .type(ChatThinkingType.DISABLED.value())
@@ -62,6 +62,33 @@ class Zai(
         val userMessage = createUserMessage(userText)
 
         val request = createUserRequest(userMessage)
+
+        val response = withContext(Dispatchers.IO) {
+            zaiClient.chat().createChatCompletion(request)
+        }
+
+        if (!response.isSuccess()) {
+            throw RuntimeException("Z.ai error: ${response.msg}")
+        }
+
+        val data = response.data ?: return "Пустой ответ от модели"
+
+        // Подстрой под реальную структуру ответа: здесь общий паттерн
+        val firstChoice = data.choices?.firstOrNull()
+            ?: return "Нет choices в ответе"
+
+        val assistantMessage = firstChoice.message
+            ?: return "Нет message в первом choice"
+
+        // в SDK контент может быть либо строкой, либо списком частей;
+        // упрощённый вариант:
+        return assistantMessage.content?.toString() ?: "Пустой content в ответе"
+    }
+
+    suspend fun invokeReviewRequest(diff: String): String {
+        val reviewMessage = createReviewMessage(diff)
+
+        val request = createUserRequest(reviewMessage)
 
         val response = withContext(Dispatchers.IO) {
             zaiClient.chat().createChatCompletion(request)
@@ -123,6 +150,44 @@ class Zai(
         }
     }
 
+    private suspend fun createReviewMessage(
+        diff: String,
+    ): ChatMessage {
+        val context = ollama.readChunksFromFolder()
+
+        val contextString = context.joinToString("\n\n") { chunk ->
+            buildString {
+                if (chunk.fileName.isNotBlank()) {
+                    appendLine("Файл: ${chunk.fileName}")
+                }
+                appendLine(chunk.chunk)
+            }
+        }
+
+        val prompt = buildString {
+            appendLine("Проанализируй изменения из pull request:")
+            appendLine()
+            appendLine("=== BEGIN DIFF ===")
+            appendLine(diff)
+            appendLine("=== END DIFF ===")
+            appendLine()
+
+            appendLine("Вот информация о проекте:")
+            appendLine(contextString)
+            appendLine()
+
+            appendLine("На основе diff ответь:")
+            appendLine("1. Соответствуют ли изменения направлению развития проекта?")
+            appendLine("2. Не противоречат ли они будущим фичам?")
+            appendLine("3. Есть ли риски, которые стоит учесть?")
+            appendLine("4. Рекомендуешь ли принять эти изменения?")
+        }
+
+        return ChatMessage.builder()
+            .role(ChatMessageRole.USER.value())
+            .content(prompt)
+            .build()
+    }
 
     /**
      * Строим контекст на основе Ollama:

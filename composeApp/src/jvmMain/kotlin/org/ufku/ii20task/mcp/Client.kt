@@ -9,7 +9,10 @@ import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.logging.*
 import io.ktor.client.plugins.sse.*
+import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.*
 import io.ktor.http.headers
 import io.ktor.serialization.kotlinx.json.*
@@ -23,12 +26,18 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.security.InvalidParameterException
 import kotlin.time.Duration.Companion.seconds
 
 
 class Client {
     private val mcp: Client = Client(clientInfo = Implementation(name = "mcp-github", version = "1.0.0"))
     private val githubToken = dotenv().get("GITHUB_PAT")
+
+
+    val json = Json {
+        ignoreUnknownKeys = true
+    }
     val http = HttpClient(CIO) {
         install(ContentNegotiation) {
             json(
@@ -93,5 +102,41 @@ class Client {
         val callWrap = callResult?.content?.map { (it as? io.modelcontextprotocol.kotlin.sdk.TextContent)?.text ?: "" }
 
         return callWrap ?: emptyList()
+    }
+
+    suspend fun getPullRequestUrl(): String {
+        val callResult = withContext(Dispatchers.IO) {
+            mcp.callTool(
+                name = "pull_request_read",
+                arguments = mapOf(
+                    "owner" to "takhir-nafikov",
+                    "repo" to "ii20task",
+                    "pullNumber" to 1,
+                    "method" to "get"
+                )
+            )
+        }
+
+        val text = callResult?.content?.map { (it as? io.modelcontextprotocol.kotlin.sdk.TextContent)?.text ?: "" }?.getOrNull(0) ?: throw InvalidParameterException("не нашли ничего")
+        val pr = json.decodeFromString<PullRequestDiffOnly>(text)
+        return pr.diffUrl
+    }
+
+    suspend fun loadDiffText(
+        diffUrl: String
+    ): String {
+        val response: HttpResponse = withContext(Dispatchers.IO) {
+            http.get(diffUrl) {
+                headers.append("Accept", "text/plain")
+//            headers.append("User-Agent", "KtorDiffClient/1.0")
+            }
+        }
+
+        // если хочешь, можешь добавить проверку кода ответа
+        if (!response.status.isSuccess()) {
+            error("Failed to download diff: HTTP ${response.status.value}")
+        }
+
+        return response.bodyAsText()
     }
 }

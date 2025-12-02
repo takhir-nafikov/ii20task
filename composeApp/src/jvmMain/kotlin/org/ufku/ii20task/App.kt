@@ -216,6 +216,12 @@ private suspend fun handleCommand(
             "вышли из сумрака(help)"
         }
 
+        "pr" -> {
+            val url = client.getPullRequestUrl()
+            val diff = client.loadDiffText(url)
+            zai.invokeReviewRequest(diff)
+        }
+
         else -> "Неизвестная команда \\${cmd.name} с аргументами: ${cmd.args.joinToString(" ")}"
     }
 }
